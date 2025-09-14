@@ -79,14 +79,14 @@ static int read_file(const char *path, char **out, size_t *out_len) {
     return 0;
 }
 
-static char *build_message(const char *from, const char *to, const char *subject,
+static char *build_message(const char *from_name, const char *from, const char *to, const char *subject,
                            const char *html_body, size_t *out_len) {
     char datebuf[64];
     rfc2822_date(datebuf, sizeof(datebuf));
 
     const char *hdr_fmt =
         "Date: %s\r\n"
-        "From: <%s>\r\n"
+        "From: %s <%s>\r\n"
         "To: <%s>\r\n"
         "Subject: %s\r\n"
         "MIME-Version: 1.0\r\n"
@@ -100,7 +100,7 @@ static char *build_message(const char *from, const char *to, const char *subject
     char *msg = (char *)malloc(need + 1);
     if (!msg) return NULL;
 
-    int n = snprintf(msg, need + 1, hdr_fmt, datebuf, from, to, subject);
+    int n = snprintf(msg, need + 1, hdr_fmt, datebuf, from_name, from, to, subject);
     memcpy(msg + n, html_body, body_len);
     msg[need] = '\0';
     *out_len = need;
@@ -126,12 +126,13 @@ static void usage(const char *prog) {
 int main(int argc, char **argv) {
     const char *server_host = DEFAULT_SMTP_HOST;
     int server_port = DEFAULT_SMTP_PORT;
-    const char *from = NULL, *to = NULL, *subject = "No subject";
+    const char *from_name = NULL, *from = NULL, *to = NULL, *subject = "No subject";
     const char *username = NULL, *token = NULL, *filename = NULL;
 
     static struct option long_opts[] = {
         {"server",   required_argument, 0, 's'},
         {"port",     required_argument, 0, 'P'},
+        {"from_name",     required_argument, 0, 'n'},
         {"from",     required_argument, 0, 'f'},
         {"to",       required_argument, 0, 't'},
         {"subject",  required_argument, 0, 'j'},
@@ -147,6 +148,7 @@ int main(int argc, char **argv) {
         switch (opt) {
             case 's': server_host = optarg; break;
             case 'P': server_port = atoi(optarg); break;
+            case 'n': from_name        = optarg; break;
             case 'f': from        = optarg; break;
             case 't': to          = optarg; break;
             case 'j': subject     = optarg; break;
@@ -160,7 +162,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (!from || !to || !username || !token || !filename) {
+    if (!from_name || !from || !to || !username || !token || !filename) {
         usage(argv[0]);
         return 1;
     }
@@ -173,7 +175,7 @@ int main(int argc, char **argv) {
     }
 
     size_t msg_len = 0;
-    char *message = build_message(from, to, subject, body, &msg_len);
+    char *message = build_message(from_name, from, to, subject, body, &msg_len);
     free(body);
     if (!message) {
         fprintf(stderr, "Failed to build message.\n");
