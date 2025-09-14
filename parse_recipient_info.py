@@ -24,6 +24,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from m365_oauth_tokeninfo import OAuthToken
 
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+
+import tempfile
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +36,21 @@ logging.basicConfig(
 )
 
 log = logging.getLogger("mailmerge")
+
+TEMPLATE_DIR = Path("email_templates")
+env = Environment(
+    loader=FileSystemLoader(TEMPLATE_DIR),
+    autoescape=select_autoescape(["html", "xml"]),
+    undefined=StrictUndefined,  # fail fast on missing keys
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
+
+def render_email(template_base: str, context: dict) -> str:
+    body_tpl = env.get_template(f"{template_base}")
+    html = body_tpl.render(**context)
+    return html
 
 
 # -------- CSV --------
@@ -116,7 +135,7 @@ SendResult = Union[SendSuccess, SendError]
 
 
 
-def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, emailhtmlpath: str, rec: Dict) -> SendResult:
+def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict) -> SendResult:
     # light jitter to avoid thundering herd
     time.sleep(random.uniform(0, SPACING))
 
@@ -126,13 +145,22 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, emailhtml
 
     toAddr = "mikecress+wafuniftest@gmail.com"
 
-    # build your CLI invocation (example args)
-    # cmd = [
-    #     "build/email-sender",                      # your email CLI
-    #     "--to", rec["email"],
-    #     "--subject", rec["subject"],
-    #     "--body", rec["body"],               # or --body-file path
-    # ]
+
+
+    # Build context from your row fields
+    ctx = {
+        "first_name": rec.get("firstname", ""),
+        "last_name":  rec.get("lastname", "")
+    }
+
+    html = render_email(templateemailhtmlpath, ctx)
+
+    # Write body to a temp file (unique per thread/recipient)
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html") as tmp:
+        tmp.write(html)
+        html_path = tmp.name
+
+
     cmd = [
         "build/email-sender",
         "--from_name", fromname,
@@ -140,7 +168,7 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, emailhtml
         "--to", toAddr,
         "--subject", subject,
         "--username", "l.bucur.cress@wafunif.org",
-        "--file", emailhtmlpath,
+        "--file", html_path,
         "--token", tokenstr
     ]
 
@@ -163,11 +191,11 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, emailhtml
     }
 
 
-def run_mail_merge(token, fromname, fromaddr, subject, emailhtmlpath, records):
+def run_mail_merge(token, fromname, fromaddr, subject, templateemailhtmlpath, records):
     results = []
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
-        futures = [pool.submit(send_one, token.access_token, fromname, fromaddr, subject, emailhtmlpath, records[0]) ]
-        # futures = [pool.submit(send_one, token.access_token, fromaddr, subject, emailhtmlpath, r) for r in records]
+        futures = [pool.submit(send_one, token.access_token, fromname, fromaddr, subject, templateemailhtmlpath, records[0]) ]
+        # futures = [pool.submit(send_one, token.access_token, fromaddr, subject, templateemailhtmlpath, r) for r in records]
         for fut in as_completed(futures):
             res = fut.result()
             print(json.dumps(res, ensure_ascii=False))
@@ -236,12 +264,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # for row in rows:
         # print( "", row['firstname'], row['lastname'], row['EmailsToUse'] )
 
-    subject = "howdy"
-    fromname = "Big Michael"
+    subject = "WAFUNIF"
+    fromname = "WAFUNIF"
     fromaddr = "membership@wafunif.org"
-    emailhtmlpath = "email.html"
+    templateemailhtmlpath = "testemail2.html.j2"
     
-    run_mail_merge( tok, fromname, fromaddr, subject, emailhtmlpath, rows )
+    run_mail_merge( tok, fromname, fromaddr, subject, templateemailhtmlpath, rows )
 
 
     return 0

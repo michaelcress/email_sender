@@ -93,7 +93,7 @@ static char *build_message(const char *from_name, const char *from, const char *
         "Content-Type: text/html; charset=UTF-8\r\n"
         "\r\n";
 
-    size_t head_len = (size_t)snprintf(NULL, 0, hdr_fmt, datebuf, from, to, subject);
+    size_t head_len = (size_t)snprintf(NULL, 0, hdr_fmt, datebuf, from_name, from, to, subject);
     size_t body_len = strlen(html_body);
     size_t need = head_len + body_len;
 
@@ -104,6 +104,7 @@ static char *build_message(const char *from_name, const char *from, const char *
     memcpy(msg + n, html_body, body_len);
     msg[need] = '\0';
     *out_len = need;
+
     return msg;
 }
 

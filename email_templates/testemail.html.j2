@@ -1,0 +1,39 @@
+<!-- HTML email body (table-based) -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f6f6f6; margin:0; padding:0;">
+  <tr>
+    <td align="center" style="padding:24px 12px;">
+      <!-- Wrapper -->
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="width:600px; max-width:100%; background:#ffffff; border-collapse:collapse;">
+        <tr>
+          <td style="padding:24px; font-family: Arial, Helvetica, sans-serif; font-size:16px; line-height:24px; color:#111111;">
+            <p style="margin:0 0 16px 0;">Your Excellency {{ first_name }} {{ last_name|default('') }},</p>
+            <p style="margin:0 0 16px 0;">Thanks for joining WAFUNIF!</p>
+
+            <!-- Example button -->
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0;">
+              <tr>
+                <td align="center" bgcolor="#2563eb" style="border-radius:4px;">
+                  <a href="{{ cta_url|default('#') }}" 
+                     style="display:inline-block; padding:12px 18px; font-family: Arial, Helvetica, sans-serif; font-size:16px; color:#ffffff; text-decoration:none;">
+                    Visit your portal
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 16px 0;">If you have any questions, reply to this email.</p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:16px 24px; font-family: Arial, Helvetica, sans-serif; font-size:12px; line-height:18px; color:#666666; background:#fafafa;">
+            You’re receiving this because you opted in. 
+            <a href="{{ unsubscribe_url|default('#') }}" style="color:#2563eb; text-decoration:underline;">Unsubscribe</a>
+          </td>
+        </tr>
+      </table>
+      <!-- /Wrapper -->
+    </td>
+  </tr>
+</table>
