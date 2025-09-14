@@ -37,7 +37,7 @@ logging.basicConfig(
 
 log = logging.getLogger("mailmerge")
 
-TEMPLATE_DIR = Path("email_templates")
+TEMPLATE_DIR = Path(".")
 env = Environment(
     loader=FileSystemLoader(TEMPLATE_DIR),
     autoescape=select_autoescape(["html", "xml"]),
@@ -116,6 +116,19 @@ def token_expired(token: Dict, skew_seconds: int = 600) -> bool:
 
 
 
+def format_address_html(address: str) -> str:
+    return (
+        address
+        .replace("_x000D_", "")      # remove artifacts
+        .replace("\r\n", "\n")       # normalize CRLF
+        .replace("\r", "\n")
+        .replace("\n", "<br>")
+    )
+
+
+
+
+
 MAX_CONCURRENCY = 12            # threads in parallel (tune carefully)
 RATE_PER_MINUTE = 600           # hard cap across all threads
 SPACING = 60.0 / max(1, RATE_PER_MINUTE)
@@ -135,7 +148,7 @@ SendResult = Union[SendSuccess, SendError]
 
 
 
-def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict) -> SendResult:
+def send_one(tokenstr: str, acct_username: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict) -> SendResult:
     # light jitter to avoid thundering herd
     time.sleep(random.uniform(0, SPACING))
 
@@ -143,14 +156,16 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templatee
     # print( f"Going to send e-mail to: {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
     log.info( f"Going to send e-mail to: {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
 
-    toAddr = "mikecress+wafuniftest@gmail.com"
-
-
+    address = rec.get("address", "")
+    if address is not None:
+        address = format_address_html( address )
 
     # Build context from your row fields
     ctx = {
-        "first_name": rec.get("firstname", ""),
-        "last_name":  rec.get("lastname", "")
+        "firstname": rec.get("firstname", ""),
+        "lastname":  rec.get("lastname", ""),
+        "country":  rec.get("entitynamelong", ""),
+        "address":  address,
     }
 
     html = render_email(templateemailhtmlpath, ctx)
@@ -160,6 +175,9 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templatee
         tmp.write(html)
         html_path = tmp.name
 
+        
+    toAddr = "mikecress+wafuniftest@gmail.com"
+
 
     cmd = [
         "build/email-sender",
@@ -167,7 +185,7 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templatee
         "--from", fromaddr,
         "--to", toAddr,
         "--subject", subject,
-        "--username", "l.bucur.cress@wafunif.org",
+        "--username", acct_username,
         "--file", html_path,
         "--token", tokenstr
     ]
@@ -191,11 +209,11 @@ def send_one(tokenstr: str, fromname:str, fromaddr: str, subject: str, templatee
     }
 
 
-def run_mail_merge(token, fromname, fromaddr, subject, templateemailhtmlpath, records):
+def run_mail_merge(token: str, acct_username: str, fromname: str, fromaddr: str, subject: str, templateemailhtmlpath: str, records: Dict):
     results = []
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
-        futures = [pool.submit(send_one, token.access_token, fromname, fromaddr, subject, templateemailhtmlpath, records[0]) ]
-        # futures = [pool.submit(send_one, token.access_token, fromaddr, subject, templateemailhtmlpath, r) for r in records]
+        futures = [pool.submit(send_one, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, records[0]) ]
+        # futures = [pool.submit(send_one, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, r) for r in records]
         for fut in as_completed(futures):
             res = fut.result()
             print(json.dumps(res, ensure_ascii=False))
@@ -206,6 +224,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Read a CSV or Excel spreadsheet into dict structures.")
     parser.add_argument("path", help="Path to the CSV or Excel file.")
     parser.add_argument("--tokenfile", help="File containing the OAuth token for authentication to the Microsoft 365 SMTP server. (Obtained by running m365_token_helper.py)")
+    parser.add_argument("--subject", help="Subject of the e-mail to be sent")
+    parser.add_argument("--username", help="Username of the Microsoft 365 account that will be sending the e-mail")
+    parser.add_argument("--from_name", help="The name of the sender that will be displayed in the From: field")
+    parser.add_argument("--from_addr", help="The From address")
+    parser.add_argument("--email_template", help="The E-mail template")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--type", choices=["csv", "excel"], help="Explicitly set the file type.")
     parser.add_argument("--sheet", help="Excel sheet name (defaults to the first/active sheet).", default=None)
@@ -214,6 +237,26 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.tokenfile is None:
         print("Please supply a valid token file value.", file=sys.stderr)
+        return 2
+
+    if args.subject is None:
+        print("Please supply a valid e-mail subject value.", file=sys.stderr)
+        return 2
+
+    if args.username is None:
+        print("Please supply a valid username value.", file=sys.stderr)
+        return 2
+
+    if args.from_name is None:
+        print("Please supply a valid from_name value.", file=sys.stderr)
+        return 2
+
+    if args.from_addr is None:
+        print("Please supply a valid from_addr value.", file=sys.stderr)
+        return 2
+
+    if args.email_template is None:
+        print("Please supply a valid email template value.", file=sys.stderr)
         return 2
 
     if args.type is None:
@@ -264,12 +307,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     # for row in rows:
         # print( "", row['firstname'], row['lastname'], row['EmailsToUse'] )
 
-    subject = "WAFUNIF"
-    fromname = "WAFUNIF"
-    fromaddr = "membership@wafunif.org"
-    templateemailhtmlpath = "testemail2.html.j2"
+    # subject = "WAFUNIF Test"
+    # fromname = "WAFUNIF Test"
+    # fromaddr = "membership@wafunif.org"
+    # templateemailhtmlpath = "testemail2.html.j2"
     
-    run_mail_merge( tok, fromname, fromaddr, subject, templateemailhtmlpath, rows )
+    run_mail_merge( tok, args.username, args.from_name, args.from_addr, args.subject, args.email_template, rows )
 
 
     return 0
