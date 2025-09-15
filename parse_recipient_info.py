@@ -15,6 +15,7 @@ import os
 import sys
 import logging
 from typing import List, Dict, Any, Optional, Union
+from logging.handlers import TimedRotatingFileHandler
 from datetime import datetime, timezone, timedelta
 
 from typing import TypedDict, Literal, Union
@@ -29,13 +30,72 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 
 import tempfile
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(threadName)s %(levelname)s %(message)s",
-    stream=sys.stdout,
-)
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format="%(asctime)s %(threadName)s %(levelname)s %(message)s",
+#     stream=sys.stdout,
+# )
 
-log = logging.getLogger("mailmerge")
+# log = logging.getLogger("email-sender")
+
+
+def setup_logging(
+    log_dir: str | Path = "logs",
+    app_name: str = "email-sender",
+    level: int = logging.INFO,
+    rotate_daily: bool = True,
+    keep: int = 14,   # how many days of logs to keep when rotating
+):
+    """
+    Configure root logger to write to console and a date-stamped file.
+    If rotate_daily=True, you'll get a new file each midnight with a YYYY-MM-DD suffix.
+    If rotate_daily=False, you'll get a single file stamped with today's date when the program starts.
+    """
+    log_dir = Path(log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Base formatter used by both console and file
+    fmt = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+    formatter = logging.Formatter(fmt, datefmt=datefmt)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Prevent duplicate handlers on repeated setup calls
+    root.handlers.clear()
+
+    # --- Console handler ---
+    ch = logging.StreamHandler(stream=sys.stdout)
+    ch.setLevel(level)
+    ch.setFormatter(formatter)
+    root.addHandler(ch)
+
+    # --- File handler ---
+    if rotate_daily:
+        # Rotates at midnight; filenames like logs/app.log.2025-09-15
+        fh = TimedRotatingFileHandler(
+            filename=log_dir / f"{app_name}.log",
+            when="midnight",
+            interval=1,
+            backupCount=keep,
+            encoding="utf-8",
+            utc=False,  # set True if you prefer UTC-based rollover
+        )
+        fh.suffix = "%Y-%m-%d"  # date-stamped suffix
+    else:
+        # Single file per run, stamped with today's date
+        today = datetime.now().strftime("%Y-%m-%d")
+        fh = logging.FileHandler(log_dir / f"{app_name}-{today}.log", encoding="utf-8")
+
+    fh.setLevel(level)
+    fh.setFormatter(formatter)
+    root.addHandler(fh)
+
+    return root  # optional, in case you want to inspect or add more handlers
+
+
+log = setup_logging(log_dir="logs", app_name="email-sender", level=logging.DEBUG, rotate_daily=True)
+
 
 TEMPLATE_DIR = Path(".")
 env = Environment(
@@ -136,11 +196,17 @@ SPACING = 60.0 / max(1, RATE_PER_MINUTE)
 
 class SendSuccess(TypedDict):
     email: str
+    firstname: str
+    lastname: str
+    country: str
     ok: Literal[True]
     ms: int
 
 class SendError(TypedDict):
     email: str
+    firstname: str
+    lastname: str
+    country: str
     ok: Literal[False]
     error: str
 
@@ -151,9 +217,6 @@ SendResult = Union[SendSuccess, SendError]
 def send_one( test_mode:bool, tokenstr: str, acct_username: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict ) -> SendResult:
     # light jitter to avoid thundering herd
     time.sleep(random.uniform(0, SPACING))
-
-    #DEBUG
-    log.info( f"Sending e-mail to: {rec['title']} {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
 
     address = rec.get("address", "")
     if address is not None:
@@ -180,6 +243,11 @@ def send_one( test_mode:bool, tokenstr: str, acct_username: str, fromname:str, f
         toAddr = rec.get("EmailsToUse", "")
     else:
         toAddr = "mikecress+wafuniftest@gmail.com"
+        # toAddr = "bucurlili13+wafuniftest@gmail.com"
+        # toAddr = "wafunif@wafunif.org"
+
+        
+    log.info( f"Sending e-mail to: {rec['title']} {rec['firstname']} {rec['lastname']} to {toAddr}" )
 
     cmd = [
         "build/email-sender",
@@ -199,13 +267,16 @@ def send_one( test_mode:bool, tokenstr: str, acct_username: str, fromname:str, f
         dt = time.time() - t0
 
         if p.returncode == 0:
-            return {"email": toAddr, "ok": True, "ms": int(dt*1000)}
+            return {"email": toAddr, "firstname": rec['firstname'], "lastname": rec['lastname'], "country": rec["entitynamelong"], "ok": True, "ms": int(dt*1000)}
         # transient? back off and retry
         time.sleep(backoff + random.uniform(0, 0.200))
         backoff = min(backoff * 2, 16.0)
 
     return {
         "email": toAddr,
+        "firstname": rec['firstname'],
+        "lastname": rec['lastname'],
+        "country": rec["entitynamelong"],
         "ok": False,
         "error": (p.stderr or p.stdout).strip()[:2000]
     }
@@ -222,15 +293,17 @@ def run_mail_merge( test_mode: bool, token: str, acct_username: str, fromname: s
         #production
         else:
             futures = [pool.submit(send_one, test_mode, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, r) for r in records]
-
+        
             
         for fut in as_completed(futures):
             res = fut.result()
-            print(json.dumps(res, ensure_ascii=False))
+            log.info(json.dumps(res, ensure_ascii=False))
             results.append(res)
     return results
 
 def main(argv: Optional[List[str]] = None) -> int:
+
+
     parser = argparse.ArgumentParser(description="Read a CSV or Excel spreadsheet into dict structures.")
     parser.add_argument("path", help="Path to the CSV or Excel file.")
     parser.add_argument("--tokenfile", help="File containing the OAuth token for authentication to the Microsoft 365 SMTP server. (Obtained by running m365_token_helper.py)")
@@ -263,35 +336,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.tokenfile is None:
-        print("Please supply a valid token file value.", file=sys.stderr)
+        log.info("Please supply a valid token file value.", file=sys.stderr)
         return 2
 
     if args.subject is None:
-        print("Please supply a valid e-mail subject value.", file=sys.stderr)
+        log.info("Please supply a valid e-mail subject value.", file=sys.stderr)
         return 2
 
     if args.username is None:
-        print("Please supply a valid username value.", file=sys.stderr)
+        log.info("Please supply a valid username value.", file=sys.stderr)
         return 2
 
     if args.from_name is None:
-        print("Please supply a valid from_name value.", file=sys.stderr)
+        log.info("Please supply a valid from_name value.", file=sys.stderr)
         return 2
 
     if args.from_addr is None:
-        print("Please supply a valid from_addr value.", file=sys.stderr)
+        log.info("Please supply a valid from_addr value.", file=sys.stderr)
         return 2
 
     if args.email_template is None:
-        print("Please supply a valid email template value.", file=sys.stderr)
+        log.info("Please supply a valid email template value.", file=sys.stderr)
         return 2
 
     if args.type is None:
-        print("Please pass --type {csv,excel} or --excel.", file=sys.stderr)
+        log.info("Please pass --type {csv,excel} or --excel.", file=sys.stderr)
         return 2
 
     if args.type == "excel" and infer_file_type(args.path) == "xls":
-        print(".xls is not supported by this script. Save as .xlsx or .csv, or install a library that supports .xls.", file=sys.stderr)
+        log.info(".xls is not supported by this script. Save as .xlsx or .csv, or install a library that supports .xls.", file=sys.stderr)
         return 2
 
     test_mode = args.test
@@ -300,24 +373,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         with open(f"{args.tokenfile}", "r", encoding="utf-8") as f:
             token_data = json.load(f)
     except FileNotFoundError:
-        print(f"{args.tokenfile} not found")
+        log.info(f"{args.tokenfile} not found")
         return 2
     except IsADirectoryError:
-        print(f"{args.tokenfile} is a directory, not a file")
+        log.info(f"{args.tokenfile} is a directory, not a file")
         return 2
     except PermissionError:
-        print(f"no permission to read {args.tokenfile}")
+        log.info(f"no permission to read {args.tokenfile}")
         return 2
 
     
     tok = OAuthToken(**token_data)
 
-    # print(f"Token data is {tok}\n")
+    # log.info(f"Token data is {tok}\n")
 
     has_token_expired = token_expired(tok)
 
     if has_token_expired:
-        print("OAuth bearer token has expired. Please refresh it and then retry this script. See README.txt for instructions on how to do this.\n")
+        log.info("OAuth bearer token has expired. Please refresh it and then retry this script. See README.txt for instructions on how to do this.\n")
         return 2
     
 
@@ -327,14 +400,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.type == "excel":
             rows = read_excel_to_rows(args.path, sheet=args.sheet)
         else:
-            print(f"Unsupported file type: {args.type}", file=sys.stderr)
+            log.info(f"Unsupported file type: {args.type}", file=sys.stderr)
             return 2
     except Exception as e:
-        print(f"Error reading file: {e}", file=sys.stderr)
+        log.info(f"Error reading file: {e}", file=sys.stderr)
         return 1
 
     # for row in rows:
-        # print( "", row['firstname'], row['lastname'], row['EmailsToUse'] )
+        # log.info( "", row['firstname'], row['lastname'], row['EmailsToUse'] )
 
     # subject = "WAFUNIF Test"
     # fromname = "WAFUNIF Test"

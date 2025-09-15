@@ -79,34 +79,117 @@ static int read_file(const char *path, char **out, size_t *out_len) {
     return 0;
 }
 
-static char *build_message(const char *from_name, const char *from, const char *to, const char *subject,
-                           const char *html_body, size_t *out_len) {
+// Ensure CRLF line endings (no bare LF). Caller must free() the result.
+// If the input already has \r\n, it is preserved; lone '\n' -> "\r\n".
+static char *sanitize_crlf(const char *input, size_t in_len, size_t *out_len) {
+    if (!input) return NULL;
+
+    // Worst case: every '\n' becomes "\r\n" -> at most in_len*2.
+    char *out = (char *)malloc(in_len * 2 + 1);
+    if (!out) return NULL;
+
+    size_t i, j = 0;
+    for (i = 0; i < in_len; i++) {
+        char c = input[i];
+        if (c == '\n') {
+            if (i == 0 || input[i-1] != '\r') out[j++] = '\r';
+            out[j++] = '\n';
+        } else {
+            out[j++] = c;
+        }
+    }
+    out[j] = '\0';
+    if (out_len) *out_len = j;
+    return out;
+}
+
+
+
+// static char *build_message(const char *from_name, const char *from, const char *to, const char *subject,
+//                            const char *html_body, size_t *out_len) {
+//     char datebuf[64];
+//     rfc2822_date(datebuf, sizeof(datebuf));
+
+//     const char *hdr_fmt =
+//         "Date: %s\r\n"
+//         "From: %s <%s>\r\n"
+//         "To: <%s>\r\n"
+//         "Subject: %s\r\n"
+//         "MIME-Version: 1.0\r\n"
+//         "Content-Type: text/html; charset=UTF-8\r\n"
+//         "\r\n";
+
+//     size_t head_len = (size_t)snprintf(NULL, 0, hdr_fmt, datebuf, from_name, from, to, subject);
+//     size_t body_len = strlen(html_body);
+//     size_t need = head_len + body_len;
+
+//     char *msg = (char *)malloc(need + 1);
+//     if (!msg) return NULL;
+
+//     int n = snprintf(msg, need + 1, hdr_fmt, datebuf, from_name, from, to, subject);
+//     memcpy(msg + n, html_body, body_len);
+//     msg[need] = '\0';
+//     *out_len = need;
+
+//     return msg;
+// }
+// Build full message with CRLF-safe headers + sanitized body.
+// Returns malloc'd buffer; caller must free(*out).
+static char *build_message_crlf(const char *from,
+                                const char *to,
+                                const char *subject,
+                                const char *html_body,
+                                size_t *out_len) {
+    // 1) Build headers using explicit CRLFs
     char datebuf[64];
     rfc2822_date(datebuf, sizeof(datebuf));
 
+    // Use only \r\n in header literals.
     const char *hdr_fmt =
         "Date: %s\r\n"
-        "From: %s <%s>\r\n"
+        "From: <%s>\r\n"
         "To: <%s>\r\n"
         "Subject: %s\r\n"
         "MIME-Version: 1.0\r\n"
         "Content-Type: text/html; charset=UTF-8\r\n"
-        "\r\n";
+        "\r\n";  // blank line before body (CRLF)
 
-    size_t head_len = (size_t)snprintf(NULL, 0, hdr_fmt, datebuf, from_name, from, to, subject);
+    // If caller accidentally passed headers with bare LFs in subject, normalize that too:
+    size_t subj_len = strlen(subject);
+    size_t subj_crlf_len = 0;
+    char *subject_crlf = sanitize_crlf(subject, subj_len, &subj_crlf_len);
+
+    // 2) Sanitize the body to CRLF
     size_t body_len = strlen(html_body);
-    size_t need = head_len + body_len;
+    size_t body_crlf_len = 0;
+    char *body_crlf = sanitize_crlf(html_body, body_len, &body_crlf_len);
+    if (!body_crlf || !subject_crlf) {
+        free(body_crlf);
+        free(subject_crlf);
+        return NULL;
+    }
 
-    char *msg = (char *)malloc(need + 1);
-    if (!msg) return NULL;
+    // 3) Compute total size and allocate
+    size_t header_len = (size_t)snprintf(NULL, 0, hdr_fmt, datebuf, from, to, subject_crlf);
+    char *msg = (char *)malloc(header_len + body_crlf_len + 1);
+    if (!msg) {
+        free(body_crlf);
+        free(subject_crlf);
+        return NULL;
+    }
 
-    int n = snprintf(msg, need + 1, hdr_fmt, datebuf, from_name, from, to, subject);
-    memcpy(msg + n, html_body, body_len);
-    msg[need] = '\0';
-    *out_len = need;
+    // 4) Emit headers + body (both are CRLF-safe now)
+    int n = snprintf(msg, header_len + 1, hdr_fmt, datebuf, from, to, subject_crlf);
+    memcpy(msg + n, body_crlf, body_crlf_len);
+    msg[header_len + body_crlf_len] = '\0';
 
+    if (out_len) *out_len = header_len + body_crlf_len;
+
+    free(body_crlf);
+    free(subject_crlf);
     return msg;
 }
+
 
 static void usage(const char *prog) {
     fprintf(stderr,
@@ -176,7 +259,8 @@ int main(int argc, char **argv) {
     }
 
     size_t msg_len = 0;
-    char *message = build_message(from_name, from, to, subject, body, &msg_len);
+    // char *message = build_message(from_name, from, to, subject, body, &msg_len);
+    char *message = build_message_crlf(from, to, subject, body, &msg_len);
     free(body);
     if (!message) {
         fprintf(stderr, "Failed to build message.\n");

@@ -1,3 +1,6 @@
 build/
 .venv/
+tokens.json
+logs/
+__pycache__/
 
