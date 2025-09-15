@@ -148,13 +148,12 @@ SendResult = Union[SendSuccess, SendError]
 
 
 
-def send_one(tokenstr: str, acct_username: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict) -> SendResult:
+def send_one( test_mode:bool, tokenstr: str, acct_username: str, fromname:str, fromaddr: str, subject: str, templateemailhtmlpath: str, rec: Dict ) -> SendResult:
     # light jitter to avoid thundering herd
     time.sleep(random.uniform(0, SPACING))
 
     #DEBUG
-    # print( f"Going to send e-mail to: {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
-    log.info( f"Going to send e-mail to: {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
+    log.info( f"Sending e-mail to: {rec['title']} {rec['firstname']} {rec['lastname']} to {rec['EmailsToUse']}" )
 
     address = rec.get("address", "")
     if address is not None:
@@ -162,6 +161,7 @@ def send_one(tokenstr: str, acct_username: str, fromname:str, fromaddr: str, sub
 
     # Build context from your row fields
     ctx = {
+        "title": rec.get("title", ""),
         "firstname": rec.get("firstname", ""),
         "lastname":  rec.get("lastname", ""),
         "country":  rec.get("entitynamelong", ""),
@@ -175,9 +175,11 @@ def send_one(tokenstr: str, acct_username: str, fromname:str, fromaddr: str, sub
         tmp.write(html)
         html_path = tmp.name
 
-        
-    toAddr = "mikecress+wafuniftest@gmail.com"
 
+    if test_mode is False:
+        toAddr = rec.get("EmailsToUse", "")
+    else:
+        toAddr = "mikecress+wafuniftest@gmail.com"
 
     cmd = [
         "build/email-sender",
@@ -209,11 +211,19 @@ def send_one(tokenstr: str, acct_username: str, fromname:str, fromaddr: str, sub
     }
 
 
-def run_mail_merge(token: str, acct_username: str, fromname: str, fromaddr: str, subject: str, templateemailhtmlpath: str, records: Dict):
+def run_mail_merge( test_mode: bool, token: str, acct_username: str, fromname: str, fromaddr: str, subject: str, templateemailhtmlpath: str, records: Dict):
     results = []
     with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
-        futures = [pool.submit(send_one, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, records[0]) ]
-        # futures = [pool.submit(send_one, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, r) for r in records]
+
+        #debug
+        if test_mode:
+            futures = [pool.submit(send_one, test_mode, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, r) for r in [ records[0], records[1], records[2], records[3], records[4], records[5], records[6] ] ]
+        
+        #production
+        else:
+            futures = [pool.submit(send_one, test_mode, token.access_token, acct_username, fromname, fromaddr, subject, templateemailhtmlpath, r) for r in records]
+
+            
         for fut in as_completed(futures):
             res = fut.result()
             print(json.dumps(res, ensure_ascii=False))
@@ -229,6 +239,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--from_name", help="The name of the sender that will be displayed in the From: field")
     parser.add_argument("--from_addr", help="The From address")
     parser.add_argument("--email_template", help="The E-mail template")
+
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--test",
+        dest="test",
+        action="store_true",
+        help="Only sends email to mikecress+wafuniftest@gmail.com",
+    )
+    group.add_argument(
+        "--no-test",
+        dest="test",
+        action="store_false",
+        help="Send email normally",
+    )
+
+    parser.set_defaults(test=True)
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--type", choices=["csv", "excel"], help="Explicitly set the file type.")
     parser.add_argument("--sheet", help="Excel sheet name (defaults to the first/active sheet).", default=None)
@@ -266,6 +293,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.type == "excel" and infer_file_type(args.path) == "xls":
         print(".xls is not supported by this script. Save as .xlsx or .csv, or install a library that supports .xls.", file=sys.stderr)
         return 2
+
+    test_mode = args.test
 
     try:
         with open(f"{args.tokenfile}", "r", encoding="utf-8") as f:
@@ -312,7 +341,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # fromaddr = "membership@wafunif.org"
     # templateemailhtmlpath = "testemail2.html.j2"
     
-    run_mail_merge( tok, args.username, args.from_name, args.from_addr, args.subject, args.email_template, rows )
+    run_mail_merge( test_mode, tok, args.username, args.from_name, args.from_addr, args.subject, args.email_template, rows )
 
 
     return 0

@@ -1,6 +1,9 @@
 Run e-mail merge with:
 
-python parse_recipient_info.py  --type excel --sheet 'MailMergeDataset' wafunif\ contact\ list.xlsx --tokenfile tokens.json
+ python parse_recipient_info.py  --type excel --sheet 'MailMergeDataset' wafunif\ contact\ list.xlsx \
+    --tokenfile tokens.json --subject "Request for Contact Information of Current Interns and Fellows" \
+    --username 'l.bucur.cress@wafunif.org' --from_name 'WAFUNIF - World Association of Former United Nations Internes and Fellows' \
+    --from_addr 'membership@wafunif.org' --email_template email_templates/requestforinterncontactinfo.html --no-test
 
 
 
@@ -13,6 +16,8 @@ Refresh token with:
 
 python m365_token_helper.py refresh --tenant '27fc3673-45b3-4ea0-8d45-04210f6434e9' --client-id '328053a5-2571-4315-bf19-7b1ed545a658' --in tokens.json --out tokens.json
 
+or use the helper script:
+$> refresh_token.sh
 
 
 Build with:
